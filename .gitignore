@@ -1,0 +1,14 @@
+.venv/
+logs/
+data/
+data_ori/
+features/
+labels/
+class_map.json
+clickhouse.sql
+debug_merged.csv
+out.csv
+feature_builder_bk*
+fetch_klines_parquet_bk*
+label_builder_bk*
+train_lstm_bk*

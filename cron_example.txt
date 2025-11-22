@@ -1,0 +1,3 @@
+
+# Cron: run at 00:15 UTC daily with auto-resume
+15 0 * * * cd /path/to/crypto_1m_kit && bash run_daily.sh "BTCUSDT,ETHUSDT,BNBUSDT" /data/data_daily /data/features_daily >> logs/cron.log 2>&1
