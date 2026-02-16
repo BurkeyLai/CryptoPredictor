@@ -287,13 +287,28 @@ def main():
         # df[f"y_cls_sign_{args.horizon_m}m"] = y_direction_with_deadzone(y_ret, eps)
         
         # ====== ATR-based deadzone ======
+        # ===== True Range =====
+        df["tr"] = np.maximum(
+            df["high"] - df["low"],
+            np.maximum(
+                (df["high"] - df["close"].shift(1)).abs(),
+                (df["low"] - df["close"].shift(1)).abs()
+            )
+        )
+
+        # ===== ATR for multiple horizons (including horizon_m) =====
+        # convert horizon minutes → ATR bars
         # 使用 args.horizon_m 分鐘的 ATR 當噪音尺度
-        atr_col = f"atr_{args.horizon_m}"
+        atr_window = max(1, H)
+        df[f"atr_{args.horizon_m}"] = df["tr"].rolling(atr_window).mean()
+
         # k = 幅度倍數（建議 0.5 ~ 1.0）
         k = 0.7  
         # eps = k × ATR（未來報酬是 log return，所以要除以 price）
         # 避免 log return 與 ATR 量級不一致
-        eps_series = k * df[atr_col] / df["close"]
+        # feature_builder.py 必須已經正確生成 atr_{horizon_m} 欄位
+        # y_cls_sign 的正負，其實是「報酬是否顯著大於當下噪音」
+        eps_series = k * df[f"atr_{args.horizon_m}"] / df["close"]
         df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
             y_ret > eps_series, 1,
             np.where(y_ret < -eps_series, -1, 0)
@@ -315,6 +330,7 @@ def main():
         df[f"y_tb_{args.horizon_m}m_t_hit"] = t_tb
 
         # 5) future realized vol (用調整後的 H)
+        # t+1 ~ t+H 的 realized volatility
         df[f"y_vol_{args.horizon_m}m"] = future_realized_vol(df["ret_1m"], H)
 
         # Keep only rows with complete future window for the daily layout
@@ -327,6 +343,7 @@ def main():
         write_out(df.loc[valid, out_cols], dst, daily_mode, args.horizon_m, args.interval)
 
         print(f"  Done: {sym}")
+        # break
 
 if __name__ == "__main__":
     main()

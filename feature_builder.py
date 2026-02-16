@@ -459,7 +459,7 @@ def main():
             base_cols
             # --- returns / trend ---
             # + ["ret_1m"]
-            + [c for c in df.columns if c.startswith("ret_")]
+            + [c for c in df.columns if (c.startswith("ret_") and c != "ret_1m_btc_ctx")]
 
             # --- moving averages / trend shape ---
             + [c for c in df.columns if c.startswith("ema_")]
@@ -471,9 +471,9 @@ def main():
 
             # --- volatility ---
             + ["atr_14"]
-            + ["tr"]
+            # + ["tr"] # True Range 是 ATR 的中間量
             + [f"atr_{args.horizon_m}"]
-            + [c for c in df.columns if c.startswith("rv_")]
+            + [c for c in df.columns if (c.startswith("rv_") and c != "rv_60_btc_ctx")]
             + [c for c in df.columns if c.startswith("park_")]
             + [c for c in df.columns if c.startswith("rs_")]
 
@@ -504,8 +504,8 @@ def main():
             if col not in df.columns:
                 print(f"  [warn] missing expected out_col: {col}")
 
-        df.to_csv('out.csv', index=False)
-        # write_out(df[out_cols], dst, daily_mode, args.interval)
+        # df.to_csv('out.csv', index=False)
+        write_out(df[out_cols], dst, daily_mode, args.interval)
         print(f"  Done: {sym}")
         # break
 
@@ -516,3 +516,14 @@ if __name__ == "__main__":
 
 # 過去 k 棒顆粒度 30 分，且預測視窗為 120 分鐘(label_builder.py 有使用 ATR 也要對應修改)
 # python feature_builder.py --src data --dst features --symbols BTCUSDT,BNBUSDT,DOGEUSDT,ETHUSDT,SOLUSDT --start 2018-01-01 --end 2025-08-23 --horizon_m 120 --interval 30 --enforce_continuous
+
+
+# 可移除欄位
+# symbol
+# open_time
+# close: 絕對價格沒有跨幣可比性，已被(ret_*、ema_*_dev、close_norm_*)取代得更好
+# volume、number_of_trades: 不同幣種、不同年份 scale 差異巨大，已被(vol_roc_*、vol_z_*、trades_z_*、obv / cmf / mfi)取代得更好
+# 技術上 OK，但「資訊高度重複」: SMA + EMA + close_norm（三套同質訊號）
+
+
+
