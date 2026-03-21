@@ -235,8 +235,30 @@ def train_transformer(
 		loss_weights: dict, e.g. {"cls":1.0, "reg":0.5, "vol":0.2, "tp":0.5}
 	"""
 	opt = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-	ce = nn.CrossEntropyLoss(reduction="none")
-	mse = nn.MSELoss(reduction="none")
+	# 自動計算 class weight
+	class_weight = None
+	if "cls" in task_heads:
+		# 收集所有 y_cls 標籤
+		all_cls_labels = []
+		for batch in train_loader:
+			y_cls = batch[1].detach().cpu().numpy()
+			# 只收集有效標籤（>=0）
+			all_cls_labels.extend(y_cls[y_cls >= 0].tolist())
+		if all_cls_labels:
+			labels_arr = np.array(all_cls_labels)
+			n_classes = int(labels_arr.max()) + 1
+			counts = np.bincount(labels_arr.astype(int), minlength=n_classes)
+			freq = counts / counts.sum()
+			# inverse frequency
+			inv_freq = 1.0 / (freq + 1e-8)
+			# normalize
+			norm_inv_freq = inv_freq / inv_freq.sum()
+			class_weight = torch.tensor(norm_inv_freq, dtype=torch.float32)
+			# print("class_weights:", class_weight.tolist())
+
+	ce = nn.CrossEntropyLoss(reduction="none", weight=class_weight.to(device) if class_weight is not None else None)
+	smoothl1 = nn.SmoothL1Loss(reduction="none")
+	# mse = nn.MSELoss(reduction="none")
 	best_val = float("inf"); best_epoch = -1
 	scaler = torch.amp.GradScaler(enabled=torch.cuda.is_available())
 	if loss_weights is None:
@@ -294,13 +316,13 @@ def train_transformer(
 				if "reg" in task_heads:
 					mask_reg = torch.isfinite(y_reg)
 					if mask_reg.any():
-						loss_reg = (mse(out["reg"][mask_reg], y_reg[mask_reg]) * w[mask_reg]).mean()
+						loss_reg = (smoothl1(out["reg"][mask_reg], y_reg[mask_reg]) * w[mask_reg]).mean()
 						loss = loss + loss_weights["reg"] * loss_reg
 				# vol (regression)
 				if "vol" in task_heads:
 					mask_vol = torch.isfinite(y_vol)
 					if mask_vol.any():
-						loss_vol = (mse(out["vol"][mask_vol], y_vol[mask_vol]) * w[mask_vol]).mean()
+						loss_vol = (smoothl1(out["vol"][mask_vol], y_vol[mask_vol]) * w[mask_vol]).mean()
 						loss = loss + loss_weights.get("vol", 0.0) * loss_vol
 				# tp (classification)
 				if "tp" in task_heads:
@@ -348,7 +370,6 @@ def train_transformer(
 			va_loss = 0.0; nva = 0
 			for batch in val_loader:
 				xb = batch[0].to(device)
-				# w = batch[5].to(device) if len(batch) > 5 else torch.ones_like(y_cls, dtype=torch.float32)
 				out = model(xb)
 				loss = 0.0
 				if "cls" in task_heads:
@@ -360,12 +381,12 @@ def train_transformer(
 					y_reg = batch[2].to(device)
 					mask_reg = torch.isfinite(y_reg)
 					if mask_reg.any():
-						loss += loss_weights["reg"] * mse(out["reg"][mask_reg], y_reg[mask_reg]).mean()
+						loss += loss_weights["reg"] * smoothl1(out["reg"][mask_reg], y_reg[mask_reg]).mean()
 				if "vol" in task_heads:
 					y_vol = batch[3].to(device)
 					mask_vol = torch.isfinite(y_vol)
 					if mask_vol.any():
-						loss += loss_weights.get("vol", 0.0) * mse(out["vol"][mask_vol], y_vol[mask_vol]).mean()
+						loss += loss_weights.get("vol", 0.0) * smoothl1(out["vol"][mask_vol], y_vol[mask_vol]).mean()
 				if "tp" in task_heads:
 					y_tp = batch[4].to(device)
 					mask_tp = y_tp >= 0
@@ -382,7 +403,7 @@ def train_transformer(
 			logging.info(f"[early-stop] best={best_val:.6f} @ epoch {best_epoch}")
 			break
 		
-		# if ep == 3:
+		# if ep == 1:
 		# 	break
 
 	ck = torch.load(ckpt, map_location=device)
@@ -393,57 +414,76 @@ def train_transformer(
 # Evaluation (mirror train_lstm.evaluate)
 # ----------------------
 def evaluate_transformer(model, loader, device, task_heads):
-    model.eval()
-    out = {}
-    with torch.no_grad():
-        correct_cls = 0; total_cls = 0
-        reg_sum = 0.0; reg_cnt = 0
-        vol_sum = 0.0; vol_cnt = 0
-        correct_tp = 0; total_tp = 0
-        for batch in loader:
-            xb = batch[0].to(device)
-            yb_cls = batch[1].to(device)
-            yb_reg = batch[2].to(device)
-            yb_vol = batch[3].to(device)
-            yb_tp = batch[4].to(device)
-            # forward
-            preds = model(xb)
-            # classification (main)
-            if "cls" in task_heads:
-                mask_cls = yb_cls >= 0
-                if mask_cls.any():
-                    pred = preds["cls"][mask_cls].argmax(dim=1)
-                    correct_cls += (pred == yb_cls[mask_cls]).sum().item()
-                    total_cls += mask_cls.sum().item()
-            # regression
-            if "reg" in task_heads:
-                mask_reg = torch.isfinite(yb_reg)
-                if mask_reg.any():
-                    reg_sum += torch.abs(preds["reg"][mask_reg] - yb_reg[mask_reg]).sum().item()
-                    reg_cnt += mask_reg.sum().item()
-            # vol (regression)
-            if "vol" in task_heads:
-                mask_vol = torch.isfinite(yb_vol)
-                if mask_vol.any():
-                    vol_sum += torch.abs(preds["vol"][mask_vol] - yb_vol[mask_vol]).sum().item()
-                    vol_cnt += mask_vol.sum().item()
-            # tp (classification)
-            if "tp" in task_heads:
-                mask_tp = yb_tp >= 0
-                if mask_tp.any():
-                    pred_tp = preds["tp"][mask_tp].argmax(dim=1)
-                    correct_tp += (pred_tp == yb_tp[mask_tp]).sum().item()
-                    total_tp += mask_tp.sum().item()
+	model.eval()
+	out = {}
+	with torch.no_grad():
+		correct_cls = 0; total_cls = 0
+		reg_sum = 0.0; reg_cnt = 0
+		vol_sum = 0.0; vol_cnt = 0
+		correct_tp = 0; total_tp = 0
+		reg_pred_list = []
+		reg_true_list = []
+		for batch in loader:
+			xb = batch[0].to(device)
+			yb_cls = batch[1].to(device)
+			yb_reg = batch[2].to(device)
+			yb_vol = batch[3].to(device)
+			yb_tp = batch[4].to(device)
+			# forward
+			preds = model(xb)
+			# classification (main)
+			if "cls" in task_heads:
+				mask_cls = yb_cls >= 0
+				if mask_cls.any():
+					pred = preds["cls"][mask_cls].argmax(dim=1)
+					correct_cls += (pred == yb_cls[mask_cls]).sum().item()
+					total_cls += mask_cls.sum().item()
+			# regression
+			if "reg" in task_heads:
+				mask_reg = torch.isfinite(yb_reg)
+				if mask_reg.any():
+					# 將預測值與真實值都除以100，確保評估在原始尺度
+					reg_pred = preds["reg"][mask_reg] / 100.0
+					reg_true = yb_reg[mask_reg] / 100.0
+					reg_sum += torch.abs(reg_pred - reg_true).sum().item()
+					reg_cnt += mask_reg.sum().item()
+					# 收集預測與真實值
+					reg_pred_list.append(reg_pred.detach().cpu().numpy())
+					reg_true_list.append(reg_true.detach().cpu().numpy())
+			# vol (regression)
+			if "vol" in task_heads:
+				mask_vol = torch.isfinite(yb_vol)
+				if mask_vol.any():
+					vol_sum += torch.abs(preds["vol"][mask_vol] - yb_vol[mask_vol]).sum().item()
+					vol_cnt += mask_vol.sum().item()
+			# tp (classification)
+			if "tp" in task_heads:
+				mask_tp = yb_tp >= 0
+				if mask_tp.any():
+					pred_tp = preds["tp"][mask_tp].argmax(dim=1)
+					correct_tp += (pred_tp == yb_tp[mask_tp]).sum().item()
+					total_tp += mask_tp.sum().item()
 
-    if "cls" in task_heads:
-        out["acc"] = correct_cls / total_cls if total_cls > 0 else float("nan")
-    if "reg" in task_heads:
-        out["mae"] = reg_sum / reg_cnt if reg_cnt > 0 else float("nan")
-    if "vol" in task_heads:
-        out["vol_mae"] = vol_sum / vol_cnt if vol_cnt > 0 else float("nan")
-    if "tp" in task_heads:
-        out["tp_acc"] = correct_tp / total_tp if total_tp > 0 else float("nan")
-    return out
+	if "cls" in task_heads:
+		out["acc"] = correct_cls / total_cls if total_cls > 0 else float("nan")
+	if "reg" in task_heads:
+		out["mae"] = reg_sum / reg_cnt if reg_cnt > 0 else float("nan")
+		# 計算 Information Coefficient (IC)
+		if reg_pred_list and reg_true_list:
+			reg_pred_all = np.concatenate(reg_pred_list)
+			reg_true_all = np.concatenate(reg_true_list)
+			if len(reg_pred_all) == len(reg_true_all) and len(reg_pred_all) > 1:
+				ic = np.corrcoef(reg_pred_all, reg_true_all)[0,1]
+				out["ic"] = float(ic)
+			else:
+				out["ic"] = float("nan")
+		else:
+			out["ic"] = float("nan")
+	if "vol" in task_heads:
+		out["vol_mae"] = vol_sum / vol_cnt if vol_cnt > 0 else float("nan")
+	if "tp" in task_heads:
+		out["tp_acc"] = correct_tp / total_tp if total_tp > 0 else float("nan")
+	return out
 
 # ========================================================================================
 # 【進階變體：分層 + 注意力加權】

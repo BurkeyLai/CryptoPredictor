@@ -9,6 +9,7 @@ class LazySeqDataset(Dataset):
     動態產生序列，避免一次將所有序列展開到記憶體。
     """
     def __init__(self, df, feats, targets, seq_len, weight_mode="none", half_life_days=90.0):
+        self.df = df
         self.feats = feats
         self.targets = targets
         self.seq_len = seq_len
@@ -108,7 +109,62 @@ class LazySeqDataset(Dataset):
         y_reg = labels["reg"][label_idx] if "reg" in labels else np.nan
         y_vol = labels["vol"][label_idx] if "vol" in labels else np.nan
         y_tp = labels["tp"][label_idx] if "tp" in labels else np.nan
+        """
+        horizon_steps = 4
+        if idx < 5:
+            print(start_idx)
+            print(label_idx)
+            print(y_reg)
+            print(self.symbol_labels[sym]["reg"][label_idx])
 
+            t = start_idx + self.seq_len - 1
+            future_t = t + horizon_steps
+
+            print("seq_start:", self.df.iloc[start_idx]["open_time"])
+            print("seq_end:", self.df.iloc[t]["open_time"])
+            print("label_time:", self.df.iloc[future_t]["open_time"])
+
+            label_ret = self.df.iloc[t]["y_reg_ret_120m"]
+            print("stored y_reg_ret_120m:", label_ret)
+
+            future_window = self.df.iloc[t : future_t]["close"]
+
+            print("future_window length:", len(future_window))
+            print("future_window time range:", self.df.iloc[t]["open_time"], "→", self.df.iloc[future_t-1]["open_time"])
+            print("future_min_time:", self.df.iloc[future_window.idxmin()]["open_time"])
+
+            price_now = self.df.iloc[t]["close"]
+            future_max = future_window.max()
+            future_min = future_window.min()
+
+            ret1 = (future_max - price_now) / price_now * 100
+            ret2 = (future_min - price_now) / price_now * 100
+
+            manual_ret = ret1 if abs(ret1) > abs(ret2) else ret2
+
+            print("manual_ret:", manual_ret)
+            print("diff:", manual_ret - label_ret)
+
+            tmp_max = self.df["close"].iloc[t : t + horizon_steps].max()
+            tmp_min = self.df["close"].iloc[t : t + horizon_steps].min()
+
+            tmp_ret1 = (tmp_max - price_now) / price_now * 100
+            tmp_ret2 = (tmp_min - price_now) / price_now * 100
+            tmp_ret = tmp_ret1 if abs(tmp_ret1) > abs(tmp_ret2) else tmp_ret2
+
+            print("recalc_ret:", tmp_ret)
+
+            # x = X[idx:idx+self.seq_len]
+            # y = y_reg[t]
+            # print(f"X shape: {x.shape} | y shape: {y.shape} | y_cls: {y_cls} | y_reg: {y_reg}")
+            # print(f"x: {x}")
+            # print(f"y: {y}")
+
+            # sample_x = X[100]
+            # sample_y = y[100]
+            # print(f"Sample X[100]: {sample_x}")
+            # print(f"Sample y[100]: {sample_y}")
+        """
         # 分類 label 映射 (cls / tp)
         if self.cls_label_map is not None and not np.isnan(y_cls):
             y_cls_idx = self.cls_label_map.get(y_cls, -1)

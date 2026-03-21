@@ -73,11 +73,28 @@ def add_logret_1m(df: pd.DataFrame) -> pd.DataFrame:
 def y_future_return(df: pd.DataFrame, H: int) -> pd.Series:
     return df["log_close"].shift(-H) - df["log_close"]
 
+# 這個版本的 y_future_maxmin_return 是基於 log return 計算的，並且直接返回未來 H 分鐘內 log return 的極值。這樣做的好處是可以捕捉到未來價格變動的最大幅度，無論是上漲還是下跌，對於一些風險管理或波動率預測的任務可能更有用。
+def y_future_maxmin_return(df: pd.DataFrame, H: int) -> pd.Series:
+    future_max = df["close"].rolling(window=H, min_periods=1).max().shift(-H+1)
+    future_min = df["close"].rolling(window=H, min_periods=1).min().shift(-H+1)
+    ret1 = (future_max - df["close"]) / df["close"]
+    ret2 = (future_min - df["close"]) / df["close"]
+    
+    return ret1.where(ret1.abs() > ret2.abs(), ret2)
+
 def y_direction_with_deadzone(y_ret: pd.Series, epsilon: float) -> pd.Series:
     out = pd.Series(np.zeros(len(y_ret), dtype="int8"), index=y_ret.index)
     out = out.mask(y_ret >  epsilon,  1)
     out = out.mask(y_ret < -epsilon, -1)
     out = out.fillna(0).astype("int8")
+    out = out.where(y_ret.notna(), np.nan)
+    return out
+
+# 二分類（只標記正/負，0 當作負或直接去除）
+def y_direction_binary(y_ret: pd.Series, epsilon: float) -> pd.Series:
+    out = pd.Series(np.zeros(len(y_ret), dtype="int8"), index=y_ret.index)
+    out = out.mask(y_ret > epsilon, 1)
+    out = out.mask(y_ret <= epsilon, 0)
     out = out.where(y_ret.notna(), np.nan)
     return out
 
@@ -280,39 +297,58 @@ def main():
         df = add_logret_1m(df)
 
         # 1) future return (用調整後的 H)
-        y_ret = y_future_return(df, H)
-        df[f"y_reg_ret_{args.horizon_m}m"] = y_ret
+        if H != 1:
+            y_ret = y_future_maxmin_return(df, H)
+        else:
+            y_ret = y_future_return(df, H)
+        # y_ret.to_csv("y_ret.csv")
 
+        df[f"y_reg_ret_{args.horizon_m}m"] = y_ret * 100.0  # convert to percentage
+        # df[f"y_reg_ret_{args.horizon_m}m"] = y_ret
         # 2) sign with dead-zone
-        # df[f"y_cls_sign_{args.horizon_m}m"] = y_direction_with_deadzone(y_ret, eps)
+        # df[f"y_cls_sign_{args.horizon_m}m"] = y_direction_binary(y_ret, eps)
         
         # ====== ATR-based deadzone ======
-        # ===== True Range =====
-        df["tr"] = np.maximum(
-            df["high"] - df["low"],
-            np.maximum(
-                (df["high"] - df["close"].shift(1)).abs(),
-                (df["low"] - df["close"].shift(1)).abs()
-            )
-        )
+        def atr_wilder(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+            prev_close = close.shift(1)
+            tr = pd.concat([
+                (high - low).abs(),
+                (high - prev_close).abs(),
+                (low - prev_close).abs()
+            ], axis=1).max(axis=1)
+            atr = tr.ewm(alpha=1.0/n, adjust=False).mean()
+            return atr
 
-        # ===== ATR for multiple horizons (including horizon_m) =====
-        # convert horizon minutes → ATR bars
-        # 使用 args.horizon_m 分鐘的 ATR 當噪音尺度
-        atr_window = max(1, H)
-        df[f"atr_{args.horizon_m}"] = df["tr"].rolling(atr_window).mean()
+        # 使用 atr_window 根 k 的 ATR 當噪音尺度
+        atr_window = 14
+        df[f"atr_{atr_window}"] = atr_wilder(df["high"], df["low"], df["close"], atr_window)
 
         # k = 幅度倍數（建議 0.5 ~ 1.0）
-        k = 0.7  
+        k = 0.6
         # eps = k × ATR（未來報酬是 log return，所以要除以 price）
         # 避免 log return 與 ATR 量級不一致
-        # feature_builder.py 必須已經正確生成 atr_{horizon_m} 欄位
         # y_cls_sign 的正負，其實是「報酬是否顯著大於當下噪音」
-        eps_series = k * df[f"atr_{args.horizon_m}"] / df["close"]
+        # 2 = 正向突破；1 = 無趨勢；0 = 負向突破
+        eps_series = k * df[f"atr_{atr_window}"] / df["close"]
         df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
-            y_ret > eps_series, 1,
-            np.where(y_ret < -eps_series, -1, 0)
+            y_ret > eps_series, 2,
+            np.where(y_ret < -eps_series, 0, 1)
         )
+        """
+        low = y_ret.quantile(0.3)
+        high = y_ret.quantile(0.7)
+
+        df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
+            y_ret > high, 2,
+            np.where(y_ret < low, 0, 1)
+        )
+        """
+        dist = df[f"y_cls_sign_{args.horizon_m}m"].value_counts().reindex([0,1,2], fill_value=0)
+        ratio = df[f"y_cls_sign_{args.horizon_m}m"].value_counts(normalize=True).reindex([0,1,2], fill_value=0)
+
+        # print(dist)
+        print(f"  Class distribution for y_cls_sign_{args.horizon_m}m:")
+        print(ratio)
 
         # 3) TP/SL first hit (+ t_hit) (用調整後的 H)
         y_tpsl, t_tpsl = label_tp_sl(

@@ -27,7 +27,7 @@ train_transform.py  (Transformer-ready preprocessing + feature engineering)
    │  ├─ bb_width, bb_pos, don_width, don_break_dist
    │
    ├─ E. 波動/風險（非常有價值，適度去冗餘）
-   │  ├─ atr_120, rv_60, rv_240, rv_60_pctile, park_60
+   │  ├─ atr_14, rv_60, rv_240, rv_60_pctile, park_60
    │
    ├─ F. 量能/資金流（完整保留）
    │  ├─ vol_z_30, vol_z_60, trades_z_60
@@ -188,7 +188,7 @@ def infer_feature_columns(df: pd.DataFrame, exclude):
     feature_patterns = {
         "base": ["close", "volume", "number_of_trades"],
         "returns": ["ret_1m"],
-        "technical": ["sma_", "rsi_14", "atr_14"],
+        "technical": ["sma_", "rsi_14", "atr_14", "atr_30", "atr_60"],
         "volatility": ["rv_"],
         "volume_analysis": ["vol_z_", "trades_z_"]
     }
@@ -262,14 +262,14 @@ def reduce_features_transformer(features_by_category: dict) -> list:
     ret_feats = features_by_category.get("returns", [])
     
     # C. 技術指標 - 高度去冗餘
-    #    原則：SMA 全砍；ATR 只保留 atr_120；RSI 保留
+    #    原則：SMA 全砍；RSI 保留
     tech_feats = features_by_category.get("technical", [])
     tech_reduced = [f for f in tech_feats if not f.startswith("sma_")]
     
     # D. 波動特徵 - 適度去冗餘
-    #    原則：保留 rv_60, rv_240, atr_120；砍掉短期（5,15,30）
+    #    原則：保留 rv_60, rv_240, atr_14, atr_30, atr_60；砍掉短期（5,15,30）
     vol_feats = features_by_category.get("volatility", [])
-    vol_keep_patterns = ["rv_60", "rv_240", "rv_60_pctile", "park_60", "rs_60", "atr_120"]
+    vol_keep_patterns = ["rv_60", "rv_240", "rv_60_pctile", "park_60", "rs_60", "atr_14", "atr_30", "atr_60"]
     vol_reduced = [f for f in vol_feats if any(f.startswith(p) for p in vol_keep_patterns)]
     
     # E. 量能 - 完整保留
@@ -531,6 +531,8 @@ def main():
     df_all = pd.concat(frames, ignore_index=True).sort_values(["symbol","open_time"]).reset_index(drop=True)
     logging.info("All columns in df_all:")
     logging.info(df_all.columns.tolist())
+    diff = df_all["open_time"].diff().dropna()
+    print(diff.value_counts())
 
     # ============================================================================
     # 【新】Preprocessing Pipeline for Transformer
@@ -609,7 +611,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     df_reduced = pd.merge(df_X, df_y, on=["symbol","open_time"], how="inner")
-    # df_reduced.to_csv("out.csv", index=False)
 
     # determine optional label names for tp / vol if present in df_y
     label_tp = args.label_tp
@@ -690,7 +691,7 @@ def main():
     #         print(f"   feat[{f}]: min={feat_min[f]:.3e} max={feat_max[f]:.3e} mean={feat_mean if isinstance(feat_mean, float) else feat_mean[f]:.3e} nan={feat_nan_counts[f]} extreme={extreme_counts[f]}")
     #     if bi + 1 >= max_batches:
     #         break
-    
+
     model = train_transformer(
         model=model,
         train_loader=train_loader,

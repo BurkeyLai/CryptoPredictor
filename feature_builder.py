@@ -293,20 +293,9 @@ def main():
         # RSI & ATR
         df["rsi_14"] = rsi_wilder(df["close"], 14)
         df["atr_14"] = atr_wilder(df["high"], df["low"], df["close"], 14)
+        df["atr_30"] = atr_wilder(df["high"], df["low"], df["close"], 30)
+        df["atr_60"] = atr_wilder(df["high"], df["low"], df["close"], 60)
 
-        # ===== True Range =====
-        df["tr"] = np.maximum(
-            df["high"] - df["low"],
-            np.maximum(
-                (df["high"] - df["close"].shift(1)).abs(),
-                (df["low"] - df["close"].shift(1)).abs()
-            )
-        )
-
-        # ===== ATR for multiple horizons (including horizon_m) =====
-        # convert horizon minutes → ATR bars
-        atr_window = max(1, H)
-        df[f"atr_{args.horizon_m}"] = df["tr"].rolling(atr_window).mean()
 
         # Realized vol
         rv = realized_vol(df["ret_1m"], windows=(5, 15, 30, 60, 120, 240))
@@ -472,7 +461,8 @@ def main():
             # --- volatility ---
             + ["atr_14"]
             # + ["tr"] # True Range 是 ATR 的中間量
-            + [f"atr_{args.horizon_m}"]
+            + [f"atr_30"]
+            + [f"atr_60"]
             + [c for c in df.columns if (c.startswith("rv_") and c != "rv_60_btc_ctx")]
             + [c for c in df.columns if c.startswith("park_")]
             + [c for c in df.columns if c.startswith("rs_")]

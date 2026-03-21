@@ -641,10 +641,10 @@ def main():
         
         # Extract label columns BEFORE normalization
         logger.info(f"\n【Detecting label columns】")
-        label_cls = "y_cls_sign_120m" if "y_cls_sign_120m" in df_data.columns else None
-        label_reg = "y_reg_ret_120m" if "y_reg_ret_120m" in df_data.columns else None
-        label_vol = "y_vol_120m" if "y_vol_120m" in df_data.columns else None
-        label_tp = "y_tp_sl_120m" if "y_tp_sl_120m" in df_data.columns else None
+        label_cls = f"y_cls_sign_{args.interval}m" if f"y_cls_sign_{args.interval}m" in df_data.columns else None
+        label_reg = f"y_reg_ret_{args.interval}m" if f"y_reg_ret_{args.interval}m" in df_data.columns else None
+        label_vol = f"y_vol_{args.interval}m" if f"y_vol_{args.interval}m" in df_data.columns else None
+        label_tp = f"y_tp_sl_{args.interval}m" if f"y_tp_sl_{args.interval}m" in df_data.columns else None
         
         labels_found = []
         if label_cls:
@@ -760,7 +760,11 @@ def main():
         preds_sym = {}
         for key in all_preds:
             if all_preds[key]:
-                preds_sym[key] = np.concatenate(all_preds[key], axis=0)
+                arr = np.concatenate(all_preds[key], axis=0)
+                # 推論時 regression 預測值除以 100
+                if key == "reg" and arr is not None:
+                    arr = arr / 100.0
+                preds_sym[key] = arr
             else:
                 preds_sym[key] = None
 
