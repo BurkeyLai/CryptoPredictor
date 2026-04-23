@@ -49,6 +49,7 @@ def parse_args():
     ap.add_argument("--tb_vol_window_m", type=int, default=60, help="Window for sigma estimation (minutes)")
     ap.add_argument("--tb_vol_method", type=str, default="ewm", choices=["ewm","rolling"], help="Sigma method")
     ap.add_argument("--interval", type=int, default=1, help="Resample interval in minutes (e.g., 5 for 5-min K-lines)")
+    ap.add_argument("--cls_type", type=str, default='atr', help="Classification type for labels, atr or quantile")
     return ap.parse_args()
 
 # ----------------------
@@ -307,42 +308,42 @@ def main():
         # df[f"y_reg_ret_{args.horizon_m}m"] = y_ret
         # 2) sign with dead-zone
         # df[f"y_cls_sign_{args.horizon_m}m"] = y_direction_binary(y_ret, eps)
-        
-        # ====== ATR-based deadzone ======
-        def atr_wilder(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
-            prev_close = close.shift(1)
-            tr = pd.concat([
-                (high - low).abs(),
-                (high - prev_close).abs(),
-                (low - prev_close).abs()
-            ], axis=1).max(axis=1)
-            atr = tr.ewm(alpha=1.0/n, adjust=False).mean()
-            return atr
+        if args.cls_type == 'atr':
+            # ====== ATR-based deadzone ======
+            def atr_wilder(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+                prev_close = close.shift(1)
+                tr = pd.concat([
+                    (high - low).abs(),
+                    (high - prev_close).abs(),
+                    (low - prev_close).abs()
+                ], axis=1).max(axis=1)
+                atr = tr.ewm(alpha=1.0/n, adjust=False).mean()
+                return atr
 
-        # 使用 atr_window 根 k 的 ATR 當噪音尺度
-        atr_window = 14
-        df[f"atr_{atr_window}"] = atr_wilder(df["high"], df["low"], df["close"], atr_window)
+            # 使用 atr_window 根 k 的 ATR 當噪音尺度
+            atr_window = 14
+            df[f"atr_{atr_window}"] = atr_wilder(df["high"], df["low"], df["close"], atr_window)
 
-        # k = 幅度倍數（建議 0.5 ~ 1.0）
-        k = 0.6
-        # eps = k × ATR（未來報酬是 log return，所以要除以 price）
-        # 避免 log return 與 ATR 量級不一致
-        # y_cls_sign 的正負，其實是「報酬是否顯著大於當下噪音」
-        # 2 = 正向突破；1 = 無趨勢；0 = 負向突破
-        eps_series = k * df[f"atr_{atr_window}"] / df["close"]
-        df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
-            y_ret > eps_series, 2,
-            np.where(y_ret < -eps_series, 0, 1)
-        )
-        """
-        low = y_ret.quantile(0.3)
-        high = y_ret.quantile(0.7)
+            # k = 幅度倍數（建議 0.5 ~ 1.0）
+            k = 0.6
+            # eps = k × ATR（未來報酬是 log return，所以要除以 price）
+            # 避免 log return 與 ATR 量級不一致
+            # y_cls_sign 的正負，其實是「報酬是否顯著大於當下噪音」
+            # 2 = 正向突破；1 = 無趨勢；0 = 負向突破
+            eps_series = k * df[f"atr_{atr_window}"] / df["close"]
+            df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
+                y_ret > eps_series, 2,
+                np.where(y_ret < -eps_series, 0, 1)
+            )
+        else:
+            low = y_ret.quantile(0.3)
+            high = y_ret.quantile(0.7)
 
-        df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
-            y_ret > high, 2,
-            np.where(y_ret < low, 0, 1)
-        )
-        """
+            df[f"y_cls_sign_{args.horizon_m}m"] = np.where(
+                y_ret > high, 2,
+                np.where(y_ret < low, 0, 1)
+            )
+
         dist = df[f"y_cls_sign_{args.horizon_m}m"].value_counts().reindex([0,1,2], fill_value=0)
         ratio = df[f"y_cls_sign_{args.horizon_m}m"].value_counts(normalize=True).reindex([0,1,2], fill_value=0)
 
