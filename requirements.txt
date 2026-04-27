@@ -3,6 +3,8 @@ numpy>=1.26
 pandas>=2.1
 pyarrow>=15.0
 requests>=2.31
+# Stocks (US/TW) downloader
+yfinance>=0.2
 # Optional: Python client if you plan to ingest via Python instead of clickhouse-client CLI
 clickhouse-connect>=0.7
 # torch --index-url https://download.pytorch.org/whl/cu126

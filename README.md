@@ -8,7 +8,9 @@
 4) （可選）匯入 **ClickHouse** 查詢/回測
 
 ## 專案內容
-- `fetch_klines_parquet.py`：抓取 1m K 線並落地 Parquet
+- `fetch_market_parquet.py`：整合抓取器（`crypto`/`stocks`），靠參數選擇市場並落地 Parquet
+- `fetch_klines_parquet.py`：**相容 wrapper**（已整合至 `fetch_market_parquet.py crypto`）
+- `fetch_yfinance_daily_parquet.py`：**相容 wrapper**（已整合至 `fetch_market_parquet.py stocks`）
 - `feature_builder.py`：讀取 Parquet，產生技術指標特徵（亦以 Parquet 落地）
 - `clickhouse.sql`：ClickHouse 建表＋範例查詢＋從 Parquet 匯入
 - `run_daily.sh` / `run_daily.ps1`：每日排程樣板（Linux/macOS / Windows）
@@ -24,7 +26,50 @@ pip install -r requirements.txt
 
 ## 抓歷史（預設：5 年，BTC/ETH/BNB）
 ```bash
-python fetch_klines_parquet.py
+python fetch_market_parquet.py crypto
+```
+
+## 抓美股/台股（日線）
+此專案的特徵/標籤/訓練流程已支援 daily partition 格式，因此股票也用相同落盤結構：
+`data_stocks_daily/1440min/symbol=.../year=.../month=.../date=YYYY-MM-DD.parquet`
+
+- 美股（例：AAPL / MSFT）：
+```bash
+python fetch_market_parquet.py stocks --symbols AAPL,MSFT --start 2018-01-01 --out data_stocks_daily
+```
+
+- 台股（例：2330、0050；預設會自動加 `.TW`）：
+```bash
+python fetch_market_parquet.py stocks --symbols 2330,0050 --start 2015-01-01 --out data_tw_daily
+```
+
+- 台股篩選適合標的
+```bash
+python fetch_market_parquet.py stocks --symbols 2330,2317,6505,0050 --tw_suffix .TW --start 2015-01-01 --out data_tw_daily --auto_resume ^
+  --universe_filter --universe_min_turnover 1e8 --universe_min_price 10 --universe_min_days 500 ^
+  --universe_dynamic_window 60 --universe_dynamic_date latest
+```
+
+- 台股全市場（不用手動塞 `--symbols`）：
+```bash
+# 上市 + 上櫃（會自動抓代碼清單，並寫到 out/tw_universe_all.txt）
+python fetch_market_parquet.py stocks --tw_universe all --start 2015-01-01 --out data_tw_all_daily --auto_resume --universe_filter
+# 只抓 上市：
+python fetch_market_parquet.py stocks --tw_universe listed --start 2018-01-01 --out data_tw_listed_daily --auto_resume --universe_filter
+# 只抓 上櫃：
+python fetch_market_parquet.py stocks --tw_universe otc --start 2018-01-01 --out data_tw_otc_daily --auto_resume --universe_filter
+```
+> 若你所在網路環境無法解析 `mopsfin.twse.com.tw`（上櫃清單來源之一），程式會自動改用其他備援來源；若仍失敗會先用上市 `.TW` 清單繼續跑（並印出 warning）。
+> `stocks` 日K 資料預設用「每月一檔」存放（較不會產生大量小檔案）。可用 `--stocks_storage yearly` 改成「每年一檔」，或 `--stocks_storage daily` 改回「每天一檔」。
+
+- 台股 OTC（用 `.TWO`）：
+```bash
+python fetch_market_parquet.py stocks --symbols 8299 --tw_suffix .TWO --start 2015-01-01 --out data_tpex_daily
+```
+
+- 自動續抓（依每個 symbol 找最後一個 `date=...parquet` 往前回補 5 天）：
+```bash
+python fetch_market_parquet.py stocks --symbols AAPL,2330 --start 2018-01-01 --out data_mixed_daily --auto_resume
 ```
 
 ## 產生特徵（覆蓋/補寫同分區檔案）
